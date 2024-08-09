@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -15,15 +16,16 @@ const bearerAuth string = "Bearer"
 
 // HTTPClientConfig mirrors config.HTTPClientConfig
 type HTTPClientConfig struct {
-	BasicAuth       *BasicAuth        `alloy:"basic_auth,block,optional"`
-	Authorization   *Authorization    `alloy:"authorization,block,optional"`
-	OAuth2          *OAuth2Config     `alloy:"oauth2,block,optional"`
-	BearerToken     alloytypes.Secret `alloy:"bearer_token,attr,optional"`
-	BearerTokenFile string            `alloy:"bearer_token_file,attr,optional"`
-	ProxyConfig     *ProxyConfig      `alloy:",squash"`
-	TLSConfig       TLSConfig         `alloy:"tls_config,block,optional"`
-	FollowRedirects bool              `alloy:"follow_redirects,attr,optional"`
-	EnableHTTP2     bool              `alloy:"enable_http2,attr,optional"`
+	BasicAuth          *BasicAuth          `alloy:"basic_auth,block,optional"`
+	Authorization      *Authorization      `alloy:"authorization,block,optional"`
+	OAuth2             *OAuth2Config       `alloy:"oauth2,block,optional"`
+	BearerToken        alloytypes.Secret   `alloy:"bearer_token,attr,optional"`
+	BearerTokenFile    string              `alloy:"bearer_token_file,attr,optional"`
+	ProxyConfig        *ProxyConfig        `alloy:",squash"`
+	CortexTenantConfig *CortexTenantConfig `alloy:"cortex_tenant,block,optional"`
+	TLSConfig          TLSConfig           `alloy:"tls_config,block,optional"`
+	FollowRedirects    bool                `alloy:"follow_redirects,attr,optional"`
+	EnableHTTP2        bool                `alloy:"enable_http2,attr,optional"`
 }
 
 // SetToDefault implements the syntax.Defaulter
@@ -92,6 +94,7 @@ func (h *HTTPClientConfig) Convert() *config.HTTPClientConfig {
 		FollowRedirects: h.FollowRedirects,
 		EnableHTTP2:     h.EnableHTTP2,
 		ProxyConfig:     h.ProxyConfig.Convert(),
+		RoundTripper:    h.CortexTenantConfig.Convert(),
 	}
 }
 
@@ -105,6 +108,18 @@ func CloneDefaultHTTPClientConfig() *HTTPClientConfig {
 var DefaultHTTPClientConfig = HTTPClientConfig{
 	FollowRedirects: true,
 	EnableHTTP2:     true,
+}
+
+// CortexTenantConfig configures cortex-tenant process before remote-write is sent
+type CortexTenantConfig struct {
+	TenantLabel       string `alloy:"tenant_label,attr,optional"`
+	TenantHeader      string `alloy:"tenant_header,attr,optional"`
+	Target            string `alloy:"target,attr,optional"`
+	TenantLabelRemove bool   `alloy:"tenant_label_remove,attr,optional"`
+}
+
+func (ct *CortexTenantConfig) Convert() http.RoundTripper {
+
 }
 
 // BasicAuth configures Basic HTTP authentication credentials.

@@ -1,151 +1,48 @@
-<p align="center">
-    <img src="docs/sources/assets/logo_alloy_light.svg#gh-dark-mode-only" alt="Grafana Alloy logo" height="100px">
-    <img src="docs/sources/assets/logo_alloy_dark.svg#gh-light-mode-only" alt="Grafana Alloy logo" height="100px">
-</p>
+# Cortex-tenant integration proof-of-concept
 
-<p align="center">
-  <a href="https://github.com/grafana/alloy/releases"><img src="https://img.shields.io/github/release/grafana/alloy.svg" alt="Latest Release"></a>
-  <a href="https://grafana.com/docs/alloy/latest"><img src="https://img.shields.io/badge/Documentation-link-blue?logo=gitbook" alt="Documentation link"></a>
-</p>
+![cortex-tenant-integration-schema](./cortex-tenant-integration.png)
 
-Grafana Alloy is an open source OpenTelemetry Collector distribution with
-built-in Prometheus pipelines and support for metrics, logs, traces, and
-profiles.
+The main aim of this proof of concept is to integrate the feature of multi-tenancy
+from cortex-tenant inside of Alloy.
 
-<p>
-<img src="docs/sources/assets/alloy_screenshot.png">
-</p>
+The trick used with this PoC is to rely on being able to customize the RoundTripper
+used by the prometheus HTTPClient when executing Remote-Write calls. If we can
+customize this RoundTripper, we can replace it by a custom RoundTripper that
+wraps cortex-tenant.
 
-## What can Alloy do?
+## Detailed description of the modifications in the PoC
 
-* **Programmable pipelines**: Use a rich [expression-based syntax][syntax] for
-  configuring powerful observability pipelines.
+There are 3 areas that need modification :
+* The prometheus HTTP Client configuration in the github.com/prometheus/common/config package to add the customization of the RoundTripper
+* The alloy configuration to add tenant customization configuration and the associated conversion of this config to the suitable prometheus config
+* The RoundTripper that wraps cortex-tenant. As cortex-tenant doesn't use the standard http lib but the fasthttp lib instead, either a net/http -> fasthttp is needed or a rewrite of the main cortex-tenant feature using the net/http lib instead of fasthttp.
 
-* **OpenTelemetry Collector Distribution**: Alloy is a [distribution][] of
-  OpenTelemetry Collector and supports dozens of its components, alongside new
-  components that make use of Alloy's programmable pipelines.
+## Possible improvements
 
-* **Big tent**: Alloy embraces Grafana's "big tent" philosophy, where Alloy
-  can be used with other vendors or open source databases. It has components
-  to perfectly integrate with multiple telemetry ecosystems:
+* Most likely, it would be better to re-implement the feature of cortex-tenant within alloy. This would allow better control over this feature and better interfacing with the rest of alloy.
+* While the custom RoundTripper is a dirty trick, it could be exploited to reserialize the content of a remote-write in whatever data structure alloy uses to transfer data between components. This means that we could output from a remote-write component to any other component taking metrics as input. Although I'm not sure if this would be useful for anything...
 
-  * [OpenTelemetry Collector][]
-  * [Prometheus][]
-  * [Grafana Loki][]
-  * [Grafana Pyroscope][]
+## Links to area of the code of interest
 
-* **Kubernetes-native**: Use components to interact with native and custom
-  Kubernetes resources; no need to learn how to use a separate Kubernetes
-  operator.
+**Be sure to clone all the required repo in the same folder so the following links work**
 
-* **Shareable pipelines**: Use [modules][] to share your pipelines with the
-  world.
+* function creating the remote-write component in alloy [../alloy/internal/component/prometheus/remotewrite/remote_write.go#68](../alloy/internal/component/prometheus/remotewrite/remote_write.go#68)
+  * This function is responsible for instantiating and running remote-write storage from prometheus by calling the remote.NewStorage() function
+* function applying the config for the remote-write component in alloy [../alloy/internal/component/prometheus/remotewrite/remote_write.go#252](../alloy/internal/component/prometheus/remotewrite/remote_write.go#252)
+* file containing alloy configs and conversion functions to prometheus config [../alloy/internal/component/common/config/types.go](../alloy/internal/component/common/config/types.go)
+* HTTPClientConfig structure definintion in prometheus/common [../common/config/http_config.go#289](../common/config/http_config.go#289)
+  * Which is created using the `NewClientFromConfig` function [../common/config/http_config.go#495](../common/config/http_config.go#495)
+  * The added `WithRoundTripper` function that adds the custom RoundTripper as an HTTPClientOption [../common/config/http_config.go#439](../common/config/http_config.go#439)
+    * This is the function to call in the alloy config conversion function to add the custom RoundTripper wrapping cortex-tenant
+* Most of the processing of cortex-tenant happens in the handler in [../cortex-tenant/processor.go#146](../cortex-tenant/processor.go#146)
+* `replace` instructions in alloy's go.mod : [../alloy/go.mod#740](../alloy/go.mod#740)
 
-* **Automatic workload distribution**: Configure Alloy instances to form a
-  [cluster][] for automatic workload distribution.
+## Note of the author on the POC
 
-* **Centralized configuration support**: Alloy supports retrieving its
-  configuration from a [server][remotecfg] for centralized configuration
-  management.
+There is no denying that the solution proposed in this POC is quite a dirty hack.
+But considering the [alternatives proposed before](https://github.com/grafana/agent/pull/2583/files),
+I feel that this solution is worth discussing.
 
-* **Debugging utilities**: Use the [built-in UI][ui] for visualizing and
-  debugging pipelines.
+I want to explicitly point out that with this solution, we proceed to serialize the remote-write request from prometheus only to immediately deserialize
+them for routing with cortex-tenant. This is indeed inefficient, but I can't think of a solution to prevent this. Suggestions welcome.
 
-[syntax]: https://grafana.com/docs/alloy/latest/concepts/configuration-syntax/
-[distribution]: https://opentelemetry.io/docs/collector/distributions/
-[OpenTelemetry Collector]: https://opentelemetry.io
-[Prometheus]: https://prometheus.io
-[Grafana Loki]: https://github.com/grafana/loki
-[Grafana Pyroscope]: https://github.com/grafana/pyroscope
-[modules]: https://grafana.com/docs/alloy/latest/concepts/modules/
-[cluster]: https://grafana.com/docs/alloy/latest/concepts/clustering/
-[remotecfg]: https://grafana.com/docs/alloy/latest/reference/config-blocks/remotecfg/
-[ui]: https://grafana.com/docs/alloy/latest/tasks/debug/
-
-## Example
-
-```alloy
-otelcol.receiver.otlp "example" {
-  grpc {
-    endpoint = "127.0.0.1:4317"
-  }
-
-  output {
-    metrics = [otelcol.processor.batch.example.input]
-    logs    = [otelcol.processor.batch.example.input]
-    traces  = [otelcol.processor.batch.example.input]
-  }
-}
-
-otelcol.processor.batch "example" {
-  output {
-    metrics = [otelcol.exporter.otlp.default.input]
-    logs    = [otelcol.exporter.otlp.default.input]
-    traces  = [otelcol.exporter.otlp.default.input]
-  }
-}
-
-otelcol.exporter.otlp "default" {
-  client {
-    endpoint = "my-otlp-grpc-server:4317"
-  }
-}
-```
-
-## Getting started
-
-Check out our [documentation][] to see:
-
-* [Installation instructions][install] for Alloy
-* Steps for [Getting started][get-started] with Alloy
-* The list of Alloy [components][]
-
-[documentation]: https://grafana.com/docs/alloy/latest
-[install]: https://grafana.com/docs/alloy/latest/get-started/install/
-[get-started]: https://grafana.com/docs/alloy/latest/get-started/
-[components]: https://grafana.com/docs/alloy/latest/reference/components/
-
-## Release cadence
-
-A new minor release is planned every six weeks.
-
-The release cadence is best-effort: if necessary, releases may be performed
-outside of this cadence, or a scheduled release date can be moved forwards or
-backwards.
-
-Minor releases published on cadence include updating dependencies for upstream
-OpenTelemetry Collector code if new versions are available. Minor releases
-published outside of the release cadence may not include these dependency
-updates.
-
-Patch and security releases may be published at any time.
-
-## Community
-
-To engage with the Alloy community:
-
-* Chat with us on our community Slack channel. To invite yourself to the
-  Grafana Slack, visit <https://slack.grafana.com/> and join the `#alloy`
-  channel.
-
-* Ask questions on the [Grafana community site][community].
-
-* [File an issue][issue] for bugs, issues, and feature suggestions.
-
-* Attend the monthly [community call][community-call].
-
-[community]: https://community.grafana.com/c/grafana-alloy
-[issue]: https://github.com/grafana/alloy/issues/new
-[community-call]: https://docs.google.com/document/d/1TqaZD1JPfNadZ4V81OCBPCG_TksDYGlNlGdMnTWUSpo
-
-## Contributing
-
-Refer to our [contributors guide][] to learn how to contribute.
-
-Thanks to all the people who have already contributed!
-
-<a href="https://github.com/grafana/alloy/graphs/contributors">
-  <img src="https://contributors-img.web.app/image?repo=grafana/alloy" />
-</a>
-
-[contributors guide]: https://github.com/grafana/alloy/blob/main/docs/developer/contributing.md
